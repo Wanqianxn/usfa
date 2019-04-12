@@ -17,16 +17,17 @@ BETA = 10 # Softmax inverse temperature, set to e.g. 50 for max instead of softm
 class DQN(torch.nn.Module):
     """ Who cares about Bellman equations when you have *deep* neural networks? """
 
-    def __init__(self, isize, osize, hsize=50):
+    def __init__(self, isize, osize, hsize=50, zerofy=True):
         """ Instantiates object, defines network architecture. """
         super(DQN, self).__init__()
         self.L1 = torch.nn.Linear(isize, hsize)
-        torch.nn.init.constant_(self.L1.weight, 0.)
-        torch.nn.init.constant_(self.L1.bias, 0.)
         self.L2 = torch.nn.Linear(hsize, osize)
-        torch.nn.init.constant_(self.L2.weight, 0.)
-        torch.nn.init.constant_(self.L2.bias, 0.)
         self.relu = torch.nn.ReLU()
+        if zerofy:
+            torch.nn.init.constant_(self.L1.weight, 0.)
+            torch.nn.init.constant_(self.L1.bias, 0.)
+            torch.nn.init.constant_(self.L2.weight, 0.)
+            torch.nn.init.constant_(self.L2.bias, 0.)
 
     def forward(self, X):
         """ Computes the forward pass. """
@@ -128,7 +129,7 @@ class MTRL:
 
         train_tasks = torch.arange(self.Ntrain).repeat(npertask)
         train_tasks = train_tasks[torch.randperm(len(train_tasks))]
-        Q = DQN(self.NS + self.NA, 1)
+        Q = DQN(self.NS + self.NA, 1, zerofy=False)
         optim = torch.optim.Adagrad(Q.parameters(), lr=alpha)
         loss = torch.nn.MSELoss()
         encS = torch.eye(self.NS)
@@ -253,7 +254,7 @@ class MTRL:
 
     def usfa_train(self, niters=200, nz=10, zsigma=0.3, threshold=0.01, alpha=ALPHA, gamma=GAMMA, beta=BETA):
         """ Universal successor feature approximators. """
-        USFN = DQN(self.NS + self.NP, self.NP)
+        USFN = DQN(self.NS + self.NP, self.NP, zerofy=False)
         encS = torch.eye(self.NS)
         optim = torch.optim.Adagrad(USFN.parameters(), lr=alpha)
         loss = torch.nn.MSELoss()
@@ -326,7 +327,7 @@ def example():
             print(pi)
         print('Q-learning works.')
 
-    if False:
+    if True:
         Q, pi = model.dqn_learning(alpha=100.0)
         for wt in model.Wtest:
             print(pi)
@@ -357,7 +358,7 @@ def example():
 
     # USFA
     if True:
-        usfn = model.usfa_train()
+        usfn = model.usfa_train(alpha=0.001)
         for wt in model.Wtest:
             pi = model.usfa_predict(usfn, wt, C=wt.unsqueeze(dim=0))
             print(pi)
