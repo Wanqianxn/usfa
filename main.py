@@ -43,13 +43,13 @@ class MTRL:
     """
     def __init__(self, Wtrain, Wtest, load_index=1):
         """ Instantiates object, load dataset. """
-        getattr(self, f'load_dataset_{load_index}')
+        getattr(self, f'load_dataset_{load_index}')()
         self.Wtrain = torch.tensor(Wtrain)
         self.Ntrain = len(self.Wtrain)
         self.Wtest = torch.tensor(Wtest)
         self.Ntest = len(self.Wtest)
 
-    def load_dataset_1(self):
+    def load_dataset_0(self):
         """ Load MDP = (S, A, T, R) for Dataset 1. """
 
         self.NS = 13 # NS = |S|, number of states
@@ -93,6 +93,59 @@ class MTRL:
         # (NS, ) boolean tensor specifying if state is terminal.
         self.is_terminal = torch.tensor([0,0,0,0,1,1,1,1,1,1,1,1,1])
 
+    def load_dataset_1f(self):
+        """ Load MDP = (S, A, T, R) for Dataset 1. """
+
+        self.NS = 13 # NS = |S|, number of states
+        self.NA = 3 # NA = |A|, number of actions
+        self.NP = 3 # NP = |phi| = |w|, dimensionality of task-space and feature-space
+        self.S = torch.arange(self.NS) # S, set of states
+        self.A = torch.arange(self.NA) # A, set of actions
+
+        # T(s,a,s') -- state transition function. (NS, NA, NS) tensor.
+        self.T = torch.zeros(self.NS, self.NA, self.NS)
+        self.T[0, 0, 1] = 1.
+        self.T[0, 1, 2] = 1.
+        self.T[0, 2, 3] = 1.
+        self.T[1, 0, 4] = 1.
+        self.T[1, 1, 5] = 1.
+        self.T[1, 2, 6] = 1.
+        self.T[2, 0, 7] = 1.
+        self.T[2, 1, 8] = 1.
+        self.T[2, 2, 9] = 1.
+        self.T[3, 0, 10] = 1.
+        self.T[3, 1, 11] = 1.
+        self.T[3, 2, 12] = 1.
+
+        # Φ(s) -- state features. (NS, 3) tensor.
+        self.phi = []
+        self.phi.append([0, 0, 0])
+        self.phi.append([0, 0, 0])
+        self.phi.append([0, 0, 0])
+        self.phi.append([0, 0, 0])
+        self.phi.append([0, 0.2, 0])
+        self.phi.append([1, 0, 1])
+        self.phi.append([0.2, 0.2, 2])
+        self.phi.append([0.9, 0, 0.9])
+        self.phi.append([0.8, 0.8, 1.6])
+        self.phi.append([0, 0.9, 0.9])
+        self.phi.append([0.2, 0.2, 0])
+        self.phi.append([0, 1, 1.6])
+        self.phi.append([0.1, 0, 0.5])
+        self.phi = torch.tensor(self.phi)
+
+        # (NS, ) boolean tensor specifying if state is terminal.
+        self.is_terminal = torch.tensor([0,0,0,0,1,1,1,1,1,1,1,1,1])
+
+    def execute(self, pi, w):
+        """ Execute policy to get reward and final state. """
+        state, reward = 0, torch.tensor([0.])
+        while not self.is_terminal[state]:
+            action = ds.Categorical(pi[state]).sample()
+            state = ds.Categorical(self.T[state, action, :]).sample()
+            reward += self.phi[state] @ w
+        return state, reward
+
     def q_learning(self, npertask=200, gamma=GAMMA, alpha=ALPHA, eps=EPSILON, beta=BETA):
         """ Vanilla (tabular) Q-learning algorithm. """
         train_tasks = torch.arange(self.Ntrain).repeat(npertask)
@@ -114,7 +167,6 @@ class MTRL:
                 new_action = actions[new_state]
                 Q[state, action] += alpha * (reward + gamma * Q[new_state, new_action] - Q[state, action])
                 state = new_state
-                print(Q)
 
         pi = torch.nn.Softmax(dim=1)(beta * Q)
         return Q, pi
@@ -252,7 +304,7 @@ class MTRL:
         pi = torch.nn.Softmax(dim=1)(beta * Q)
         return pi
 
-    def usfa_train(self, niters=200, nz=10, zsigma=0.3, threshold=0.01, alpha=ALPHA, gamma=GAMMA, beta=BETA):
+    def usfa_train(self, niters=200, nz=10, zsigma=1, threshold=0.01, alpha=ALPHA, gamma=GAMMA, beta=BETA):
         """ Universal successor feature approximators. """
         USFN = DQN(self.NS + self.NP, self.NP, zerofy=False)
         encS = torch.eye(self.NS)
@@ -317,8 +369,7 @@ def example():
     """ A working example of an MTRL instance. """
     wtrain = [[1., 0, 0], [0., 1, 0]]
     wtest = [[1., 1, 0], [0., 0, 1]]
-    model = MTRL(wtrain, wtest)
-    model.load_dataset_1()
+    model = MTRL(wtrain, wtest, load_index='0')
 
     # Q-learning / DQN
     if False:
@@ -364,4 +415,88 @@ def example():
             print(pi)
         print('USFA works.')
 
-example()
+def simulate_1f(nsubjects=60):
+    wtrain = [[1., -2, 0], [-2, 1, 0], [1, -1, 0], [-1, 1, 0]]
+    wtest = [[1., 1, -1], [0, 0, 1]]
+    wall = torch.Tensor(wtrain + wtest)
+
+    subjects = []
+    all_endstates = torch.zeros(nsubjects, 7, len(wtrain) + len(wtest), dtype=torch.long)
+    all_rewards = torch.zeros(nsubjects, 7, len(wtrain) + len(wtest))
+    for j in range(nsubjects):
+        print(f'[root] SUBJECT {j}')
+        model = MTRL(wtrain, wtest, load_index='1f')
+
+        # Training
+        print(f'[root] Training...')
+        _, qpi = model.q_learning(npertask=100)
+        uvfn = model.uvfa_train(npertask=100)
+        psi = model.sfgpi_train()
+        usfn = model.usfa_train(niters=400, nz=5, zsigma=0.5)
+
+        # Prediction
+        print(f'[root] Predicting...')
+        for i in range(len(wall)):
+            _, pi = model.value_iteration(wall[i])
+            all_endstates[j,0,i], all_rewards[j,0,i] = model.execute(pi, wall[i])
+            all_endstates[j,1,i], all_rewards[j,1,i] = model.execute(qpi, wall[i])
+            pi = model.uvfa_predict(uvfn, wall[i])
+            all_endstates[j,2,i], all_rewards[j,2,i] = model.execute(pi, wall[i])
+            pi = model.sfgpi_predict(psi, wall[i])
+            all_endstates[j,3,i], all_rewards[j,3,i] = model.execute(pi, wall[i])
+            pi = model.usfa_predict(usfn, wall[i], model.Wtrain)
+            all_endstates[j,4,i], all_rewards[j,4,i] = model.execute(pi, wall[i])
+            pi = model.usfa_predict(usfn, wall[i], wall[i].unsqueeze(dim=0))
+            all_endstates[j,5,i], all_rewards[j,5,i] = model.execute(pi, wall[i])
+            pi = model.usfa_predict(usfn, wall[i], torch.cat((model.Wtrain, wall[i].unsqueeze(dim=0)), 0))
+            all_endstates[j,6,i], all_rewards[j,6,i] = model.execute(pi, wall[i])
+
+        subjects.append(model)
+    return subjects, all_endstates, all_rewards, wall
+
+def plot_results(all_endstates, all_rewards, wall, nstates=13):
+    algos = ['MB', 'MF', 'UVFA', 'SFGPI', 'USFA-M', 'USFA-W', 'USFA-MW']
+
+    # Train -- End states
+    plt.figure()
+    idx = 1
+    for alidx in range(7):
+        for widx in range(4):
+            vals = all_endstates[:,alidx,widx].bincount(minlength=nstates)[4:]
+            plt.subplot(7, 4, idx)
+            plt.xticks([5,6,7,8,9,10,11,12,13], size=7)
+            plt.bar([5,6,7,8,9,10,11,12,13], vals, width=0.4)
+            if widx == 0:
+                plt.ylabel(algos[alidx])
+            if alidx == 0:
+                plt.title(f'Tr: {wall[widx].tolist()}', size=9)
+            #if alidx != 6:
+            #    plt.tick_params(axis='x', bottom=False, labelbottom=False)
+            idx += 1
+    plt.tight_layout()
+    plt.savefig('tr3.png')
+
+    # Test -- End states
+    plt.figure()
+    idx = 1
+    for alidx in range(7):
+        for widx in range(4, 6):
+            vals = all_endstates[:,alidx,widx].bincount(minlength=nstates)[4:]
+            plt.subplot(7, 2, idx)
+            plt.xticks([5,6,7,8,9,10,11,12,13], size=7)
+            plt.bar([5,6,7,8,9,10,11,12,13], vals, width=0.4)
+            if widx == 4:
+                plt.ylabel(algos[alidx])
+            if alidx == 0:
+                plt.title(f'Te: {wall[widx].tolist()}', size=9)
+            #if alidx != 6:
+            #    plt.tick_params(axis='x', bottom=False, labelbottom=False)
+            idx += 1
+    plt.tight_layout()
+    plt.savefig('te3.png')
+
+
+_, all_endstates, all_rewards, wall = simulate_1f()
+plot_results(all_endstates, all_rewards, wall)
+torch.save(all_endstates, 'endstates.pt')
+torch.save(all_rewards, 'rewards.pt')
